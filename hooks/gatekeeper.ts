@@ -105,7 +105,7 @@ interface LogEntry {
   tool: string;
   input_summary: string;
   interpretation?: string;
-  decision: "allow" | "block" | "error";
+  decision: "allow" | "ask" | "error";
   reason?: string;
   latency_ms: number;
 }
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
     tool: data.tool_name,
     input_summary: inputSummary(data.tool_name, data.tool_input ?? {}),
     interpretation: result.interpretation,
-    decision: result.safe ? "allow" : "block",
+    decision: result.safe ? "allow" : "ask",
     ...(result.reason ? { reason: result.reason } : {}),
     latency_ms,
   });
@@ -183,13 +183,9 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: result.reason ?? "gatekeeper denied",
-    },
-  }) + "\n");
+  // safe: false → 理由を stderr に出して Claude Code の ② プロンプトに委ねる
+  // Claude がユーザーに yes/no を問い、理由を提示する
+  process.stderr.write(`[gatekeeper] ⚠️ ${result.reason ?? "要確認の操作です"}\n`);
   process.exit(0);
 }
 
