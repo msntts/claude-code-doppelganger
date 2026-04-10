@@ -1,0 +1,94 @@
+---
+name: review
+description: Security と DevOps の2観点からコード変更を独立したエージェントでレビューし、統合的な判断を返す。コミット前・push前に使用する。
+user-invocable: true
+allowed-tools:
+  - Bash(git diff *)
+  - Bash(git status *)
+  - Bash(claude -p *)
+---
+
+# /review
+
+git の差分を対象に、Security と DevOps の2つの独立したエージェントがレビューし、統合的な判断を返す。
+
+引数: `$ARGUMENTS`（省略時は `HEAD` との差分を対象とする）
+
+---
+
+## 実行フロー
+
+### 1. 差分の収集
+
+Bash ツールで以下を実行する：
+
+```bash
+git diff HEAD
+```
+
+差分が空の場合は `git diff HEAD~1 HEAD` で直前のコミットを対象とする。
+それも空なら「レビュー対象の変更がありません」と伝えて終了する。
+
+---
+
+### 2. Security エージェント
+
+以下を Bash ツールで実行する（差分を引数として渡す）：
+
+```bash
+claude -p --no-session-persistence \
+  --system-prompt "あなたはセキュリティの専門家です。コード変更を以下の観点でレビューしてください。
+
+- 認証・認可の不備
+- 入力検証・サニタイズの欠如
+- 機密情報の露出（APIキー・パスワード・トークンのハードコード）
+- SQLインジェクション・XSS・CSRFなど OWASP Top 10
+- 依存パッケージの既知脆弱性の兆候
+
+問題がある場合: severity（high/medium/low）・該当箇所・理由を箇条書きで返す。
+問題がない場合: 「問題なし」の一言のみ。前置き・説明文は不要。" \
+  "$(git diff HEAD)"
+```
+
+---
+
+### 3. DevOps エージェント
+
+以下を Bash ツールで実行する：
+
+```bash
+claude -p --no-session-persistence \
+  --system-prompt "あなたは DevOps・インフラの専門家です。コード変更を以下の観点でレビューしてください。
+
+- 本番環境へのデプロイ影響（ダウンタイム・マイグレーション・後方互換性）
+- 環境変数・設定ファイルの変更
+- CI/CD パイプラインへの影響
+- Docker・コンテナ設定の変更
+- ログ・モニタリング・アラートへの影響
+
+問題がある場合: severity（high/medium/low）・該当箇所・理由を箇条書きで返す。
+問題がない場合: 「問題なし」の一言のみ。前置き・説明文は不要。" \
+  "$(git diff HEAD)"
+```
+
+---
+
+### 4. 統合と報告
+
+両エージェントの出力を以下のフォーマットで整理して報告する：
+
+```
+## /review 結果
+
+### Security
+{Security エージェントの出力}
+
+### DevOps
+{DevOps エージェントの出力}
+
+---
+### 判定
+🔴 要修正   — high severity の問題あり。修正してからコミット・push してください。
+🟡 要確認   — medium / low の指摘あり。内容を確認してから進めてください。
+🟢 問題なし  — 両観点で問題は検出されませんでした。
+```

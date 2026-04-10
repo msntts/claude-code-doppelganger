@@ -28,4 +28,14 @@ fi
 MSYS=winsymlinks:nativestrict ln -s "$SCRIPT_DIR/hooks" "$CLAUDE_DIR/hooks"
 echo "  hooks/ のシンボリックリンクを作成しました"
 
+# --- skills/ ---
+if [ -L "$CLAUDE_DIR/skills" ]; then
+  rm "$CLAUDE_DIR/skills"
+elif [ -d "$CLAUDE_DIR/skills" ]; then
+  mv "$CLAUDE_DIR/skills" "$CLAUDE_DIR/skills.bak"
+  echo "既存の skills/ を skills.bak/ にバックアップしました"
+fi
+MSYS=winsymlinks:nativestrict ln -s "$SCRIPT_DIR/skills" "$CLAUDE_DIR/skills"
+echo "  skills/ のシンボリックリンクを作成しました"
+
 echo "完了。Claude Code を再起動してください。"
