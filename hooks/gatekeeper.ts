@@ -10,6 +10,9 @@
  */
 
 import { spawnSync } from "child_process";
+import { appendFileSync, existsSync, renameSync, statSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 
 // 読み取り専用ツールは判定不要で即通過
 const READONLY_TOOLS = new Set([
@@ -23,6 +26,9 @@ const READONLY_TOOLS = new Set([
   "TaskGet",
   "TaskList",
 ]);
+
+const LOG_PATH = join(homedir(), ".claude", "gatekeeper-log.jsonl");
+const MAX_LOG_BYTES = 10 * 1024 * 1024; // 10MB
 
 const SYSTEM_PROMPT = `\
 あなたは Claude Code のツール呼び出しの安全性を判定するゲートキーパーです。
@@ -93,6 +99,36 @@ interface Judgment {
   reason?: string;
 }
 
+interface LogEntry {
+  timestamp: string;
+  session_id: string;
+  tool: string;
+  input_summary: string;
+  interpretation?: string;
+  decision: "allow" | "block" | "error";
+  reason?: string;
+  latency_ms: number;
+}
+
+function inputSummary(toolName: string, toolInput: Record<string, unknown>): string {
+  if (toolName === "Bash") return String(toolInput.command ?? "").slice(0, 200);
+  if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
+    return String(toolInput.file_path ?? "");
+  }
+  return JSON.stringify(toolInput).slice(0, 200);
+}
+
+function writeLog(entry: LogEntry): void {
+  try {
+    if (existsSync(LOG_PATH) && statSync(LOG_PATH).size >= MAX_LOG_BYTES) {
+      renameSync(LOG_PATH, LOG_PATH + ".1");
+    }
+    appendFileSync(LOG_PATH, JSON.stringify(entry) + "\n", "utf-8");
+  } catch {
+    // ログ失敗はサイレントに無視
+  }
+}
+
 function judge(toolName: string, toolInput: Record<string, unknown>): Judgment {
   const userMessage = JSON.stringify({ tool: toolName, input: toolInput }, null, 2);
 
@@ -102,15 +138,10 @@ function judge(toolName: string, toolInput: Record<string, unknown>): Judgment {
     { encoding: "utf-8", timeout: 30000 }
   );
 
-  if (result.error) {
-    throw new Error(`subprocess error: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(`claude exited with ${result.status}: ${result.stderr}`);
-  }
+  if (result.error) throw new Error(`subprocess error: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`claude exited with ${result.status}: ${result.stderr}`);
 
-  const text = result.stdout.trim();
-  return JSON.parse(text) as Judgment;
+  return JSON.parse(result.stdout.trim()) as Judgment;
 }
 
 async function main(): Promise<void> {
@@ -121,12 +152,24 @@ async function main(): Promise<void> {
 
   const data: HookInput = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
 
-  // 読み取り専用ツールは即通過
   if (READONLY_TOOLS.has(data.tool_name)) {
     process.exit(0);
   }
 
+  const start = Date.now();
   const result = judge(data.tool_name, data.tool_input ?? {});
+  const latency_ms = Date.now() - start;
+
+  writeLog({
+    timestamp: new Date().toISOString().slice(0, 19),
+    session_id: data.session_id ?? "",
+    tool: data.tool_name,
+    input_summary: inputSummary(data.tool_name, data.tool_input ?? {}),
+    interpretation: result.interpretation,
+    decision: result.safe ? "allow" : "block",
+    ...(result.reason ? { reason: result.reason } : {}),
+    latency_ms,
+  });
 
   if (result.safe) {
     process.exit(0);
@@ -139,7 +182,15 @@ async function main(): Promise<void> {
 }
 
 main().catch((err: Error) => {
-  // フック自体の障害はサイレントに通過させる
+  writeLog({
+    timestamp: new Date().toISOString().slice(0, 19),
+    session_id: "",
+    tool: "unknown",
+    input_summary: "",
+    decision: "error",
+    reason: err.message,
+    latency_ms: 0,
+  });
   process.stderr.write(`[gatekeeper] error: ${err.message}\n`);
   process.exit(0);
 });
