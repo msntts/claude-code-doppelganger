@@ -2,10 +2,6 @@
 name: review
 description: Security と DevOps の2観点からコード変更を独立したエージェントでレビューし、統合的な判断を返す。コミット前・push前に使用する。
 user-invocable: true
-allowed-tools:
-  - Bash(git diff *)
-  - Bash(git status *)
-  - Bash(claude -p *)
 ---
 
 # /review
