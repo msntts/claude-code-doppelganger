@@ -172,13 +172,25 @@ async function main(): Promise<void> {
   });
 
   if (result.safe) {
+    // ② のビルトイン権限チェックをスキップして即実行
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: result.interpretation ?? "gatekeeper approved",
+      },
+    }) + "\n");
     process.exit(0);
   }
 
-  process.stdout.write(
-    JSON.stringify({ decision: "block", reason: result.reason }) + "\n"
-  );
-  process.exit(1);
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: result.reason ?? "gatekeeper denied",
+    },
+  }) + "\n");
+  process.exit(0);
 }
 
 main().catch((err: Error) => {
