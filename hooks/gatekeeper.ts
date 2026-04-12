@@ -153,6 +153,13 @@ async function main(): Promise<void> {
   const data: HookInput = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
 
   if (READONLY_TOOLS.has(data.tool_name)) {
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: "read-only tool",
+      },
+    }) + "\n");
     process.exit(0);
   }
 
