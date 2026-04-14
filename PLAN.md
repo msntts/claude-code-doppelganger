@@ -36,9 +36,9 @@
 
 ## Phase 3: 旧スキルの撤去と参照更新 [REVIEW]
 
-- [ ] 3-1. `advisor/SKILL.md` の `user-invocable: false` → `true` に変更
-- [ ] 3-2. `~/.claude/skills/code/` を削除
-- [ ] 3-3. `advisor`・`review` の SKILL.md 内で `/code` を参照している箇所を `/execute` に更新
+- [x] 3-1. `advisor/SKILL.md` の `user-invocable: false` → `true` に変更
+- [x] 3-2. `~/.claude/skills/code/` を削除
+- [x] 3-3. `advisor`・`review` の SKILL.md 内で `/code` を参照している箇所を `/execute` に更新（参照なし）
 
 ---
 

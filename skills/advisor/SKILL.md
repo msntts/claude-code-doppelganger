@@ -1,7 +1,7 @@
 ---
 name: advisor
 description: 設計・計画の判断を担うAdvisorスキル。Executorから呼ばれ、PLAN.mdの生成・更新に必要な設計判断を行う。ユーザーが直接呼ぶことも可能。
-user-invocable: false
+user-invocable: true
 ---
 
 # Advisor
