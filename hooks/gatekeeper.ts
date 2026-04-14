@@ -10,9 +10,9 @@
  */
 
 import { spawnSync } from "child_process";
-import { appendFileSync, existsSync, renameSync, statSync } from "fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, statSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { isAbsolute, join } from "path";
 
 // 読み取り専用ツールは判定不要で即通過
 const READONLY_TOOLS = new Set([
@@ -91,6 +91,7 @@ interface HookInput {
   tool_name: string;
   tool_input: Record<string, unknown>;
   session_id?: string;
+  cwd?: string;
 }
 
 interface Judgment {
@@ -129,12 +130,38 @@ function writeLog(entry: LogEntry): void {
   }
 }
 
-function judge(toolName: string, toolInput: Record<string, unknown>): Judgment {
+function loadProjectPrompt(cwd?: string): string | null {
+  if (!cwd || !isAbsolute(cwd)) return null;
+  const target = join(cwd, ".claude", "gatekeeper.md");
+  if (!existsSync(target)) return null;
+  try {
+    const resolved = realpathSync(target);
+    const base = realpathSync(cwd);
+    if (!resolved.startsWith(base + "/") && !resolved.startsWith(base + "\\")) return null;
+    return readFileSync(resolved, "utf-8").trim();
+  } catch {
+    return null;
+  }
+}
+
+function buildSystemPrompt(cwd?: string): string {
+  const projectPrompt = loadProjectPrompt(cwd);
+  if (!projectPrompt) return SYSTEM_PROMPT;
+  return (
+    SYSTEM_PROMPT +
+    "\n\n## プロジェクト固有のルール\n" +
+    "以下のルールはグローバルのルールより優先される。矛盾する場合はこちらに従うこと。\n\n" +
+    projectPrompt
+  );
+}
+
+function judge(toolName: string, toolInput: Record<string, unknown>, cwd?: string): Judgment {
   const userMessage = JSON.stringify({ tool: toolName, input: toolInput }, null, 2);
+  const systemPrompt = buildSystemPrompt(cwd);
 
   const result = spawnSync(
     "claude",
-    ["-p", "--no-session-persistence", "--system-prompt", SYSTEM_PROMPT, userMessage],
+    ["-p", "--no-session-persistence", "--system-prompt", systemPrompt, userMessage],
     { encoding: "utf-8", timeout: 30000 }
   );
 
@@ -164,7 +191,7 @@ async function main(): Promise<void> {
   }
 
   const start = Date.now();
-  const result = judge(data.tool_name, data.tool_input ?? {});
+  const result = judge(data.tool_name, data.tool_input ?? {}, data.cwd);
   const latency_ms = Date.now() - start;
 
   writeLog({
