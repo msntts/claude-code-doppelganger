@@ -32,7 +32,7 @@
 
 ## Phase 2: CLAUDE.md へフォーマット規約を移設
 
-- [ ] 2-1. `~/.claude/CLAUDE.md` にフォーマッター規約セクションを追加
+- [x] 2-1. `~/.claude/CLAUDE.md` にフォーマッター規約セクションを追加
 
 ## Phase 3: 旧スキルの撤去と参照更新 [REVIEW]
 
