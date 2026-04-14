@@ -25,21 +25,6 @@
 
 ---
 
-## Phase 1: 新スキル作成
-
-- [x] 1-1. `/execute/SKILL.md` を作成（`/code` のタスク管理層を移植、フォーマット詳細は CLAUDE.md 参照に）
-- [x] 1-2. `/investigate/SKILL.md` を作成（`/code` のデバッグ調査モードを移植、収束後 `/execute` への導線を明記）
-
-## Phase 2: CLAUDE.md へフォーマット規約を移設
-
-- [x] 2-1. `~/.claude/CLAUDE.md` にフォーマッター規約セクションを追加
-
-## Phase 3: 旧スキルの撤去と参照更新 [REVIEW]
-
-- [x] 3-1. `advisor/SKILL.md` の `user-invocable: false` → `true` に変更
-- [x] 3-2. `~/.claude/skills/code/` を削除
-- [x] 3-3. `advisor`・`review` の SKILL.md 内で `/code` を参照している箇所を `/execute` に更新（参照なし）
-
 ---
 
 ## メモ・決定事項
@@ -50,3 +35,6 @@
 - タスク管理層の汎用化はしない（YAGNI）
 
 ## 完了済みフェーズ
+- Phase 1: 新スキル作成 `422efe0..422efe0`
+- Phase 2: CLAUDE.md へフォーマット規約を移設 `03450cf..03450cf`
+- Phase 3: 旧スキルの撤去と参照更新 `5c82777..5c82777`
