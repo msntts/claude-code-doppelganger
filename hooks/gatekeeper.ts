@@ -9,7 +9,7 @@
  * エラー時はフック自体の障害でユーザー操作を止めないよう exit 0 にフォールバックする。
  */
 
-import { spawnSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, statSync } from "fs";
 import { homedir } from "os";
 import { isAbsolute, join } from "path";
@@ -130,9 +130,17 @@ function writeLog(entry: LogEntry): void {
   }
 }
 
+function currentBranch(): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf-8", timeout: 5000 }).trim();
+  } catch {
+    return null;
+  }
+}
+
 function loadProjectPrompt(cwd?: string): string | null {
   if (!cwd || !isAbsolute(cwd)) return null;
-  const target = join(cwd, ".claude", "gatekeeper.md");
+  const target = join(cwd, ".claude", "approval_policy.md");
   if (!existsSync(target)) return null;
   try {
     const resolved = realpathSync(target);
@@ -185,6 +193,28 @@ async function main(): Promise<void> {
         hookEventName: "PreToolUse",
         permissionDecision: "allow",
         permissionDecisionReason: "read-only tool",
+      },
+    }) + "\n");
+    process.exit(0);
+  }
+
+  const branch = currentBranch();
+  if (branch?.startsWith("debug/")) {
+    const reason = `debug/* ブランチのため自動承認 (branch: ${branch})`;
+    writeLog({
+      timestamp: new Date().toISOString().slice(0, 19),
+      session_id: data.session_id ?? "",
+      tool: data.tool_name,
+      input_summary: inputSummary(data.tool_name, data.tool_input ?? {}),
+      decision: "allow",
+      reason,
+      latency_ms: 0,
+    });
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: reason,
       },
     }) + "\n");
     process.exit(0);
