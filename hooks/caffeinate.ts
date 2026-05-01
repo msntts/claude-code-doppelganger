@@ -9,7 +9,7 @@
  */
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs";
-import { spawnSync, execFileSync } from "child_process";
+import { spawn } from "child_process";
 
 const PID_FILE = "/tmp/claude_caffeinate.pid";
 
@@ -26,13 +26,14 @@ function start(): void {
     }
   }
 
-  const proc = spawnSync("caffeinate", ["-di"], {
+  const proc = spawn("caffeinate", ["-di"], {
     detached: true,
     stdio: "ignore",
-  } as never);
+  });
+  proc.unref();
 
-  if ((proc as { pid?: number }).pid) {
-    writeFileSync(PID_FILE, String((proc as { pid: number }).pid), "utf-8");
+  if (proc.pid) {
+    writeFileSync(PID_FILE, String(proc.pid), "utf-8");
   }
 }
 

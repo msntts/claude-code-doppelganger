@@ -1,11 +1,8 @@
 {
   "tools": [
-    "Agent",
-    "Bash",
     "Glob",
     "Grep",
     "Read",
-    "Skill",
     "ToolSearch",
     "WebFetch",
     "WebSearch"
