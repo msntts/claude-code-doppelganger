@@ -263,31 +263,31 @@ function buildSystemPrompt(cwd?: string): string {
   );
 }
 
-const JUDGMENT_SCHEMA = JSON.stringify({
-  type: "object",
-  properties: {
-    interpretation: { type: "string" },
-    decision: { type: "string", enum: ["approve", "ask", "block"] },
-    learn: { type: "boolean" },
-    reason: { type: "string" },
-  },
-  required: ["decision"],
-});
-
 interface ClaudeJsonOutput {
   result: string;
   is_error?: boolean;
 }
 
+const VALID_DECISIONS = new Set(["approve", "ask", "block"]);
+
 function extractJson(text: string): Judgment {
   const cleaned = text.trim().replace(/^```(?:json)?\s*/m, "").replace(/\s*```$/m, "").trim();
+  let parsed: unknown;
   try {
-    return JSON.parse(cleaned) as Judgment;
+    parsed = JSON.parse(cleaned);
   } catch {
     const match = cleaned.match(/\{.*\}/s);
-    if (match) return JSON.parse(match[0]) as Judgment;
-    throw new Error(`JSON not found in: ${text.slice(0, 200)}`);
+    if (!match) throw new Error(`JSON not found in: ${text.slice(0, 200)}`);
+    parsed = JSON.parse(match[0]);
   }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`expected object, got ${typeof parsed} in: ${text.slice(0, 200)}`);
+  }
+  const j = parsed as Judgment;
+  if (typeof j.decision !== "string" || !VALID_DECISIONS.has(j.decision)) {
+    throw new Error(`invalid decision "${j.decision}" in: ${text.slice(0, 200)}`);
+  }
+  return j;
 }
 
 function judge(toolName: string, toolInput: Record<string, unknown>, cwd?: string): Judgment {
@@ -301,7 +301,6 @@ function judge(toolName: string, toolInput: Record<string, unknown>, cwd?: strin
       "--no-session-persistence",
       "--model", "claude-haiku-4-5-20251001",
       "--output-format", "json",
-      "--json-schema", JUDGMENT_SCHEMA,
       "--system-prompt", systemPrompt,
       userMessage,
     ],
@@ -395,7 +394,7 @@ async function main(): Promise<void> {
   };
 
   if (result.decision === "approve") {
-    if (result.learn) {
+    if (result.learn === true) {
       saveReadonlyTool(toolName, data.cwd);
     }
     writeLog(logEntry);
@@ -420,5 +419,6 @@ main().catch((err: Error) => {
     latency_ms: 0,
   });
   process.stderr.write(`[gatekeeper] error: ${err.message}\n`);
-  process.exit(0);
+  // フック自体の障害でユーザー操作を止めないよう明示的に allow してフォールバック
+  allow(`gatekeeper error (fail-open): ${err.message}`);
 });
