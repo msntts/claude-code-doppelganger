@@ -54,16 +54,15 @@
 - push は明示的に指示されたときのみ行う
 - フィードバックを受けて修正した場合は修正完了時に改めてコミットする
 
-## `~/.claude/` 配下の管理（doppelganger）
+## symlink された設定ファイルの git 管理判定
 
-`~/.claude/` 直下の以下は `~/repos/doppelganger/` のシンボリックリンクで、**git 管理下**である:
+`~/.claude/` 配下や dotfile 系のファイルは、別リポジトリへのシンボリックリンクで管理されていることが多い。これらを編集する際は:
 
-- `~/.claude/CLAUDE.md` → `~/repos/doppelganger/CLAUDE.md`
-- `~/.claude/skills/` → `~/repos/doppelganger/skills/`
-- `~/.claude/hooks/` → `~/repos/doppelganger/hooks/`
-- `~/.claude/settings.json` → `~/repos/doppelganger/settings.json`
+1. `ls -la <親ディレクトリ>` でリンクかどうか確認する
+2. `readlink <パス>` でリンク先を辿る
+3. リンク先のリポジトリで `git status` / `git commit` する
 
-これらを編集したら `~/repos/doppelganger/` で commit する。`~/.claude/` を直接 `git rev-parse` してリンク先を見ないと「git 管理外」と誤認しやすいので注意。
+`<該当ディレクトリ>` で `git rev-parse --is-inside-work-tree` だけを根拠に「git 管理外」と判定しない（リンクの実体は別 repo にある）。
 
 ## 技術スタイル
 - JS/TS、Python、DevOps（Docker / CI-CD）が主戦場
