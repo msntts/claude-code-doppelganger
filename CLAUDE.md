@@ -54,6 +54,17 @@
 - push は明示的に指示されたときのみ行う
 - フィードバックを受けて修正した場合は修正完了時に改めてコミットする
 
+## `~/.claude/` 配下の管理（doppelganger）
+
+`~/.claude/` 直下の以下は `~/repos/doppelganger/` のシンボリックリンクで、**git 管理下**である:
+
+- `~/.claude/CLAUDE.md` → `~/repos/doppelganger/CLAUDE.md`
+- `~/.claude/skills/` → `~/repos/doppelganger/skills/`
+- `~/.claude/hooks/` → `~/repos/doppelganger/hooks/`
+- `~/.claude/settings.json` → `~/repos/doppelganger/settings.json`
+
+これらを編集したら `~/repos/doppelganger/` で commit する。`~/.claude/` を直接 `git rev-parse` してリンク先を見ないと「git 管理外」と誤認しやすいので注意。
+
 ## 技術スタイル
 - JS/TS、Python、DevOps（Docker / CI-CD）が主戦場
 - シンプルさ優先：必要最小限の実装、投機的な抽象化は作らない
