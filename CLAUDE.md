@@ -54,6 +54,14 @@
 - push は明示的に指示されたときのみ行う
 - フィードバックを受けて修正した場合は修正完了時に改めてコミットする
 
+## git コマンドの前に `cd` を置かない
+
+`cd /path && git ...` のパターンを書かない。
+
+- 同 repo 内のサブディレクトリにいるなら、そのまま `git <subcommand>` を打てば repo 全体に対して動作する（git は親方向に `.git` を探す）
+- 別 repo を操作したいときは **`git -C /path/to/repo <subcommand>`** を使う
+- `cd` を git に前置すると gatekeeper が「target directory の hooks が untrusted で実行され得る」として許可ダイアログを毎回出す
+
 ## symlink された設定ファイルの git 管理判定
 
 `~/.claude/` 配下や dotfile 系のファイルは、別リポジトリへのシンボリックリンクで管理されていることが多い。これらを編集する際は:
