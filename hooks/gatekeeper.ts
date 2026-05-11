@@ -273,6 +273,20 @@ const NEVER_READONLY: ReadonlySet<string> = new Set([
   "Monitor",
 ]);
 
+function loadBashAllowPatterns(cwd?: string): string[] {
+  const claudeDir = projectClaudeDir(cwd);
+  if (!claudeDir) return [];
+  try {
+    const data = JSON.parse(
+      readFileSync(join(claudeDir, "allow_patterns.json"), "utf-8"),
+    ) as { bash?: unknown };
+    if (!Array.isArray(data.bash)) return [];
+    return data.bash.filter((p): p is string => typeof p === "string");
+  } catch {
+    return [];
+  }
+}
+
 function loadReadonlyTools(cwd?: string): Set<string> {
   const claudeDir = projectClaudeDir(cwd);
   if (!claudeDir) return new Set();
@@ -528,6 +542,25 @@ async function main(): Promise<void> {
       !/--no-verify\b|--amend\b/.test(cmd)
     ) {
       const reason = "git add/commit (ローカル・--no-verify なし) → 自動承認";
+      writeLog({
+        ...baseLog,
+        timestamp: new Date().toISOString().slice(0, 19),
+        decision: "allow",
+        reason,
+        latency_ms: 0,
+      });
+      allow(reason);
+      return;
+    }
+  }
+
+  // 0.45. per-project Bash allow patterns（特定コマンドの静的 allow）
+  if (toolName === "Bash") {
+    const cmd = String(toolInput.command ?? "");
+    const bashPatterns = loadBashAllowPatterns(data.cwd);
+    const matchedPattern = bashPatterns.find((p) => cmd.includes(p));
+    if (matchedPattern) {
+      const reason = `allow_patterns match: "${matchedPattern}" → 自動承認`;
       writeLog({
         ...baseLog,
         timestamp: new Date().toISOString().slice(0, 19),

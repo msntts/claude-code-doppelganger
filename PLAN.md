@@ -24,6 +24,10 @@ gatekeeper の LLM 役割を「category を返すだけ」に縮小し、allow/a
 
 - [x] H-1. `loadCategoryOverrides` に `NEVER_OVERRIDE_TO_ALLOW` ガード追加（`destructive`・`system_write` への allow 上書きを禁止）
 - [x] H-2. `git push`（force なし）挙動変更確認：旧 auto-approve → 新 `ask`（`GLOBAL_DECISION.git_remote = "ask"` の設計仕様。CLAUDE.md「push は明示指示のときのみ」と整合）
+- [x] H-3. `allow_patterns.json` による Bash コマンドパターン単位の静的 allow 実装（`category_overrides.json` は category 単位で粒度が粗すぎるため）
+  - `loadBashAllowPatterns(cwd)` 関数を追加し、main() の 0.4 直後（0.45）に挿入
+  - kintai-kanri に `.claude/allow_patterns.json: {"bash": ["clasp push", "clasp deploy"]}` を作成
+  - kintai-kanri の `category_overrides.json`（`external_write: allow`）は `{}` に無効化（物理削除は gatekeeper が rm をブロックするため保留）
 
 ---
 
@@ -36,7 +40,7 @@ gatekeeper の LLM 役割を「category を返すだけ」に縮小し、allow/a
 
 ## Phase 2: per-project 設定移行
 
-- [ ] 2-1. rpa: `approval_policy.md` を分類ヒントスタイルに書き直す（category_overrides.json は不要）
+- [x] 2-1. rpa: `approval_policy.md` を分類ヒントスタイルに書き直す（category_overrides.json は不要）
 - [ ] 2-2. kintai-kanri: `approval_policy.md` を分類ヒントスタイルに書き直す + `category_overrides.json` 新設（`external_write → allow`）
 
 ## Phase 3: ドキュメント更新
