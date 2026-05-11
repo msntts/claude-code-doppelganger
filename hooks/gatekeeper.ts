@@ -3,11 +3,15 @@
  * PreToolUse hook — 危険度判定と承認フロー
  *
  * 判定フロー:
- *   0. denied_patterns（ALWAYS_DENY）→ 即ブロック
- *   0.5. debug/* ブランチ → 全操作を自動承認
- *   1. readonly_tools.json に登録済み → 即承認
- *   2. LLM 判定（approval_policy.md 基準）
- *      - learn: true のとき readonly_tools.json に永続化
+ *   0.   denied_patterns（ALWAYS_DENY）→ 即ブロック
+ *   0.2  LLM CLI hard guard → 機密参照あり → 即 ask
+ *   0.3  claude -p が hard guard 通過 → 即 allow
+ *   0.4  git add/commit（安全）→ 即 allow
+ *   0.5  debug/* ブランチ → 全操作を即 allow
+ *   1.   readonly_tools.json に登録済み → 即 allow
+ *   2.   LLM 分類（category のみ返す。allow/ask/block の決定は TypeScript が行う）
+ *   3.   per-project category_overrides.json → カテゴリ単位の決定上書き
+ *   4.   GLOBAL_DECISION マップ → 最終判定
  *
  * エラー時はフック自体の障害でユーザー操作を止めないよう exit 0 にフォールバックする。
  */
@@ -16,12 +20,10 @@ import { execFileSync, spawnSync } from "child_process";
 import {
   appendFileSync,
   existsSync,
-  mkdirSync,
   readFileSync,
   realpathSync,
   renameSync,
   statSync,
-  writeFileSync,
 } from "fs";
 import { homedir } from "os";
 import { isAbsolute, join } from "path";
@@ -30,73 +32,65 @@ const LOG_PATH = join(homedir(), ".claude", "gatekeeper-log.jsonl");
 const LOG_MAX_BYTES = 10 * 1024 * 1024; // 10MB
 
 const SYSTEM_PROMPT = `\
-あなたは Claude Code のツール呼び出しの安全性を判定するゲートキーパーです。
-ツール名と入力内容を受け取り、実行を許可するかどうかを判定します。
+あなたは Claude Code のツール呼び出しを **分類するだけ** のアナライザーです。
+allow/ask/block の判断は行いません。以下の固定カテゴリのいずれかに分類してください。
 
-## 承認ポリシー
+## カテゴリ定義
 
-操作を評価するときは、以下の2軸で考える。
-
-### 軸1: 副作用の有無（read-only か否か）
-- **read-only**: ファイルやシステムの状態を変えない操作
-- **write / destructive**: 状態を変える操作
-
-### 軸2: 回復可能性（git管理下か否か）
-- **回復可能**: git リポジトリ配下のファイルへの操作（untracked でも .git/ があれば対象）
-- **回復困難**: git 管理外（~/.ssh/、~/.aws/、/etc/ 等）
-
-### 自動承認してよい操作
-- ファイルの読み取り（cat / head / tail / grep / find 等）
-- git 読み取りコマンド（status / log / diff / show / branch 等）
-- コマンド出力の確認（ls / ps / env / which / df / du 等）
-- Web の取得（fetch / curl の GET 等）
-- 解析目的の \`claude -p\` / \`claude --print\` 呼び出し（stdin/引数で対象を渡し stdout で結果を受ける形）。ただし以下を **すべて満たす場合のみ**:
-  - \`--no-session-persistence\` 等で会話履歴を残さない
-  - 送信内容に機密ファイルパス（\`~/.ssh/\`、\`.env\`、\`*.pem\`、\`id_rsa\`、\`id_ed25519\`、\`credentials\`、\`*kube/config\`、\`*aws/credentials\` 等）が含まれない
-  - 上記いずれかを満たさない場合は ask に倒す
-  - 他ベンダー CLI（\`gemini\`、\`ollama\` 等）はベンダー別の判断対象になるため自動承認しない（ask）
-- git 管理下プロジェクト配下のファイル編集・作成・削除
-- git add / git commit（ローカル）/ git push（force なし）
-  ※ CLAUDE.md のワークフロールール（「コミット前に /review を呼べ」等）の遵守確認はゲートキーパーの役割外。安全性のみで判定する
-- ~/.claude/ 配下の編集（settings.json を除く）
-- テスト実行・ビルドコマンド
-- プロジェクト内に閉じるパッケージインストール（グローバルフラグなし）
-
-### 要確認（ask）操作
-- git push --force / --force-with-lease
-- プロジェクト外へのファイル書き込み（~/.ssh/、~/.aws/、/etc/ 等）
-- ~/.claude/settings.json の編集
-- グローバル・システムへのパッケージインストール（-g / --global / sudo / brew install 等）
-- 外部サービスへの書き込み（API の POST / PUT / DELETE 等。read-only な GET、および上記条件を満たす \`claude -p\` 呼び出しのみ「自動承認」側で扱う）
-- プロセス管理（kill / pkill 等）
-- cron の登録・削除
-- 環境変数の永続化（.env 書き込み等）
-
-### ブロック（block）操作
-- git 管理外のファイル・ディレクトリの削除（バックアップなし）
-- git push --force（--force-with-lease は ask）
-- git reset --hard
-- git commit --no-verify / git push --no-verify
-- DROP TABLE / DROP DATABASE / TRUNCATE TABLE（特に prod 接続先）
-- 本番環境への直接デプロイ（CI/CD 経由でない操作）
-
-迷ったら ask。明らかに危険な操作のみ block。
+| category | 該当する操作の例 |
+|---|---|
+| readonly | ファイル読み取り（cat/grep/find）、git status/log/diff、ls/ps/env、curl GET、Web 取得 |
+| git_local | git add、git commit（--amend なし）|
+| git_remote | git push（force なし）、git fetch、git pull |
+| external_write | 外部 API への書き込み（POST/PUT/DELETE）、clasp push/deploy、S3 upload など |
+| system_write | ~/.ssh/・~/.aws/・/etc/ など git 管理外への書き込み |
+| destructive | rm -rf、DROP TABLE/DATABASE、git push --force、git reset --hard |
+| uncertain | 上記に当てはまらない、または判断に必要な情報が不足している |
 
 ## 判定手順
-必ず以下の順序で思考してから出力すること。
 
-1. **操作の解釈**: このツール呼び出しが実際に何をするのかを平易な日本語で述べる
-2. **不可逆性の評価**: その操作は元に戻せるか。git 管理下か、対象範囲はどこか等を考慮する
-3. **learn 判定**: このツール種別がどんな入力でも常に read-only であれば true（例: WebSearch → true / Edit・Write・Bash → false）
-4. **判定**: approve / ask / block のいずれかを決定する
+1. このツール呼び出しが実際に何をするかを把握する
+2. 上記カテゴリ表のどれに最も近いかを選ぶ
+3. 迷ったら uncertain にする（allow/ask/block を直接判断しようとしない）
 
 ## 出力形式
+
 必ず以下の JSON のみを返すこと。説明文・前置き・コードブロックは不要。
 
-{"interpretation": "操作の意味を一文で（日本語）", "decision": "approve", "learn": false}
-{"interpretation": "操作の意味を一文で（日本語）", "decision": "ask", "learn": false, "reason": "何を確認すべきか（日本語）"}
-{"interpretation": "操作の意味を一文で（日本語）", "decision": "block", "learn": false, "reason": "何が危険か（日本語）"}\
+{"category": "readonly", "interpretation": "操作の意味（日本語一文）"}
+{"category": "external_write", "interpretation": "操作の意味（日本語一文）", "reason": "ask 時にユーザーへ表示するメッセージ（省略可）"}\
 `;
+
+// カテゴリ定義
+type Category =
+  | "readonly"
+  | "git_local"
+  | "git_remote"
+  | "external_write"
+  | "system_write"
+  | "destructive"
+  | "uncertain";
+
+const VALID_CATEGORIES = new Set<string>([
+  "readonly",
+  "git_local",
+  "git_remote",
+  "external_write",
+  "system_write",
+  "destructive",
+  "uncertain",
+]);
+
+// カテゴリ → デフォルト判定マップ
+const GLOBAL_DECISION: Record<Category, "allow" | "ask" | "block"> = {
+  readonly: "allow",
+  git_local: "allow",
+  git_remote: "ask",
+  external_write: "ask",
+  system_write: "ask",
+  destructive: "block",
+  uncertain: "ask",
+};
 
 interface HookInput {
   tool_name: string;
@@ -106,9 +100,8 @@ interface HookInput {
 }
 
 interface Judgment {
+  category: Category;
   interpretation?: string;
-  decision: "approve" | "ask" | "block";
-  learn?: boolean;
   reason?: string;
 }
 
@@ -128,9 +121,16 @@ interface DeniedPatterns {
   bash_patterns: string[];
 }
 
-function inputSummary(toolName: string, toolInput: Record<string, unknown>): string {
+function inputSummary(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string {
   if (toolName === "Bash") return String(toolInput.command ?? "").slice(0, 200);
-  if (toolName === "Write" || toolName === "Edit" || toolName === "NotebookEdit") {
+  if (
+    toolName === "Write" ||
+    toolName === "Edit" ||
+    toolName === "NotebookEdit"
+  ) {
     return String(toolInput.file_path ?? "");
   }
   return JSON.stringify(toolInput).slice(0, 200);
@@ -174,7 +174,10 @@ function projectClaudeDir(cwd?: string): string | null {
 }
 
 function loadDeniedPatterns(cwd?: string): DeniedPatterns {
-  const globalPath = join(import.meta.dirname ?? __dirname, "denied_patterns.json");
+  const globalPath = join(
+    import.meta.dirname ?? __dirname,
+    "denied_patterns.json",
+  );
   let data: DeniedPatterns = { tools: [], bash_patterns: [] };
   try {
     data = JSON.parse(readFileSync(globalPath, "utf-8")) as DeniedPatterns;
@@ -186,9 +189,13 @@ function loadDeniedPatterns(cwd?: string): DeniedPatterns {
   if (claudeDir) {
     const localPath = join(claudeDir, "denied_patterns.json");
     try {
-      const local = JSON.parse(readFileSync(localPath, "utf-8")) as DeniedPatterns;
+      const local = JSON.parse(
+        readFileSync(localPath, "utf-8"),
+      ) as DeniedPatterns;
       data.tools = [...new Set([...data.tools, ...(local.tools ?? [])])];
-      data.bash_patterns = [...new Set([...data.bash_patterns, ...(local.bash_patterns ?? [])])];
+      data.bash_patterns = [
+        ...new Set([...data.bash_patterns, ...(local.bash_patterns ?? [])]),
+      ];
     } catch {
       // プロジェクトファイルがなければスキップ
     }
@@ -197,7 +204,11 @@ function loadDeniedPatterns(cwd?: string): DeniedPatterns {
   return data;
 }
 
-function isDenied(toolName: string, toolInput: Record<string, unknown>, patterns: DeniedPatterns): string | null {
+function isDenied(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  patterns: DeniedPatterns,
+): string | null {
   if (patterns.tools.includes(toolName)) {
     return `${toolName}: denied_patterns により常時ブロック`;
   }
@@ -218,8 +229,7 @@ const LLM_CLI_PATTERN = /\bclaude\s+(?:-p\b|--print\b)/;
 // 機密ファイル参照らしき文字列の検出。LLM CLI 呼び出し時に含まれていたら強制 ask。
 // SYSTEM_PROMPT の LLM 判定だけでは見落としうるため、コード側の hard guard として持つ。
 // 注意: ブラックリスト方式のため網羅性は保証されない（任意の `secrets.txt`・`*.token` 等は
-// このリストに無ければ素通りする）。最終的な責任はユーザー判断に委ねる前提で、メジャーな
-// 機密パスのみを ask に倒すための補助ガードとして運用する。
+// このリストになければ素通りする）。最終的な責任はユーザー判断に委ねる前提で運用する。
 const SECRET_REF_PATTERNS: ReadonlyArray<RegExp> = [
   /(^|[\s"'=/])~?\/?\.ssh\//i,
   /(^|[\s"'=/])\.env(\b|\.|"|')/i,
@@ -234,11 +244,13 @@ const SECRET_REF_PATTERNS: ReadonlyArray<RegExp> = [
   /service[_-]?account.*\.json\b/i,
 ];
 
-function forceAskForLLMCli(toolName: string, toolInput: Record<string, unknown>): string | null {
+function forceAskForLLMCli(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+): string | null {
   if (toolName !== "Bash") return null;
   const command = String(toolInput.command ?? "");
   if (!LLM_CLI_PATTERN.test(command)) return null;
-  // policy で必須要件としている履歴非保存フラグが付いていない場合は ask に倒す
   if (!/--no-session-persistence\b/.test(command)) {
     return "claude -p 呼び出しに --no-session-persistence が付いていません。会話履歴が残る形は自動承認対象外です";
   }
@@ -251,7 +263,6 @@ function forceAskForLLMCli(toolName: string, toolInput: Record<string, unknown>)
 }
 
 // 任意の入力で副作用を起こせるツールは learn 対象から永続的に除外する。
-// LLM が learn:true を返してしまった場合の最後のガード。
 const NEVER_READONLY: ReadonlySet<string> = new Set([
   "Bash",
   "Edit",
@@ -266,33 +277,12 @@ function loadReadonlyTools(cwd?: string): Set<string> {
   const claudeDir = projectClaudeDir(cwd);
   if (!claudeDir) return new Set();
   try {
-    const data = JSON.parse(readFileSync(join(claudeDir, "readonly_tools.json"), "utf-8")) as { tools: string[] };
+    const data = JSON.parse(
+      readFileSync(join(claudeDir, "readonly_tools.json"), "utf-8"),
+    ) as { tools: string[] };
     return new Set((data.tools ?? []).filter((t) => !NEVER_READONLY.has(t)));
   } catch {
     return new Set();
-  }
-}
-
-function saveReadonlyTool(toolName: string, cwd?: string): void {
-  if (NEVER_READONLY.has(toolName)) return;
-  const claudeDir = projectClaudeDir(cwd);
-  if (!claudeDir) return;
-  try {
-    mkdirSync(claudeDir, { recursive: true });
-    const path = join(claudeDir, "readonly_tools.json");
-    let tools: Set<string> = new Set();
-    try {
-      const data = JSON.parse(readFileSync(path, "utf-8")) as { tools: string[] };
-      tools = new Set(data.tools ?? []);
-    } catch {
-      // 新規作成
-    }
-    if (!tools.has(toolName)) {
-      tools.add(toolName);
-      writeFileSync(path, JSON.stringify({ tools: [...tools].sort() }, null, 2) + "\n", "utf-8");
-    }
-  } catch {
-    // 保存失敗はサイレントに無視
   }
 }
 
@@ -310,12 +300,45 @@ function loadProjectPolicy(cwd?: string): string | null {
   }
 }
 
+// destructive・system_write は allow に上書きできない（サプライチェーン経由の設定ファイル改ざんで
+// 破壊操作が自動承認されるリスクを防ぐ）。ask への変更のみ許可。
+const NEVER_OVERRIDE_TO_ALLOW: ReadonlySet<Category> = new Set([
+  "destructive",
+  "system_write",
+]);
+
+function loadCategoryOverrides(
+  cwd?: string,
+): Partial<Record<Category, "allow" | "ask" | "block">> {
+  const claudeDir = projectClaudeDir(cwd);
+  if (!claudeDir) return {};
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(claudeDir, "category_overrides.json"), "utf-8"),
+    ) as Record<string, string>;
+    const result: Partial<Record<Category, "allow" | "ask" | "block">> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (
+        VALID_CATEGORIES.has(k) &&
+        (v === "allow" || v === "ask" || v === "block")
+      ) {
+        const cat = k as Category;
+        if (v === "allow" && NEVER_OVERRIDE_TO_ALLOW.has(cat)) continue;
+        result[cat] = v;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 function buildSystemPrompt(cwd?: string): string {
   const projectPolicy = loadProjectPolicy(cwd);
   if (!projectPolicy) return SYSTEM_PROMPT;
   return (
     SYSTEM_PROMPT +
-    "\n\n## プロジェクト固有のルール（グローバルより優先）\n\n" +
+    "\n\n## プロジェクト固有の分類ヒント（グローバルより優先）\n\n" +
     projectPolicy
   );
 }
@@ -325,10 +348,12 @@ interface ClaudeJsonOutput {
   is_error?: boolean;
 }
 
-const VALID_DECISIONS = new Set(["approve", "ask", "block"]);
-
 function extractJson(text: string): Judgment {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/m, "").replace(/\s*```$/m, "").trim();
+  const cleaned = text
+    .trim()
+    .replace(/^```(?:json)?\s*/m, "")
+    .replace(/\s*```$/m, "")
+    .trim();
   let parsed: unknown;
   try {
     parsed = JSON.parse(cleaned);
@@ -338,17 +363,34 @@ function extractJson(text: string): Judgment {
     parsed = JSON.parse(match[0]);
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`expected object, got ${typeof parsed} in: ${text.slice(0, 200)}`);
+    throw new Error(
+      `expected object, got ${typeof parsed} in: ${text.slice(0, 200)}`,
+    );
   }
-  const j = parsed as Judgment;
-  if (typeof j.decision !== "string" || !VALID_DECISIONS.has(j.decision)) {
-    throw new Error(`invalid decision "${j.decision}" in: ${text.slice(0, 200)}`);
+  const j = parsed as Record<string, unknown>;
+  if (typeof j.category !== "string" || !VALID_CATEGORIES.has(j.category)) {
+    throw new Error(
+      `invalid category "${j.category}" in: ${text.slice(0, 200)}`,
+    );
   }
-  return j;
+  return {
+    category: j.category as Category,
+    interpretation:
+      typeof j.interpretation === "string" ? j.interpretation : undefined,
+    reason: typeof j.reason === "string" ? j.reason : undefined,
+  };
 }
 
-function judge(toolName: string, toolInput: Record<string, unknown>, cwd?: string): Judgment {
-  const userMessage = JSON.stringify({ tool: toolName, input: toolInput }, null, 2);
+function judge(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  cwd?: string,
+): Judgment {
+  const userMessage = JSON.stringify(
+    { tool: toolName, input: toolInput },
+    null,
+    2,
+  );
   const systemPrompt = buildSystemPrompt(cwd);
 
   const result = spawnSync(
@@ -356,41 +398,51 @@ function judge(toolName: string, toolInput: Record<string, unknown>, cwd?: strin
     [
       "-p",
       "--no-session-persistence",
-      "--model", "claude-haiku-4-5-20251001",
-      "--output-format", "json",
-      "--system-prompt", systemPrompt,
+      "--model",
+      "claude-haiku-4-5-20251001",
+      "--output-format",
+      "json",
+      "--system-prompt",
+      systemPrompt,
       userMessage,
     ],
-    { encoding: "utf-8", timeout: 30000 }
+    { encoding: "utf-8", timeout: 30000 },
   );
 
-  if (result.error) throw new Error(`subprocess error: ${result.error.message}`);
-  if (result.status !== 0) throw new Error(`claude exited with ${result.status}: ${result.stderr}`);
+  if (result.error)
+    throw new Error(`subprocess error: ${result.error.message}`);
+  if (result.status !== 0)
+    throw new Error(`claude exited with ${result.status}: ${result.stderr}`);
 
   const envelope = JSON.parse(result.stdout.trim()) as ClaudeJsonOutput;
-  if (envelope.is_error) throw new Error(`claude returned error: ${envelope.result}`);
+  if (envelope.is_error)
+    throw new Error(`claude returned error: ${envelope.result}`);
   return extractJson(envelope.result);
 }
 
 function allow(reason: string): void {
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "allow",
-      permissionDecisionReason: reason,
-    },
-  }) + "\n");
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: reason,
+      },
+    }) + "\n",
+  );
   process.exit(0);
 }
 
 function block(reason: string): void {
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-    },
-  }) + "\n");
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: reason,
+      },
+    }) + "\n",
+  );
   process.exit(0);
 }
 
@@ -409,12 +461,26 @@ async function main(): Promise<void> {
   const toolName = data.tool_name;
   const toolInput = data.tool_input ?? {};
   const summary = inputSummary(toolName, toolInput);
-  const baseLog = { session_id: data.session_id ?? "", tool: toolName, input_summary: summary };
+  const baseLog = {
+    session_id: data.session_id ?? "",
+    tool: toolName,
+    input_summary: summary,
+  };
 
   // 0. ALWAYS_DENY
-  const deniedReason = isDenied(toolName, toolInput, loadDeniedPatterns(data.cwd));
+  const deniedReason = isDenied(
+    toolName,
+    toolInput,
+    loadDeniedPatterns(data.cwd),
+  );
   if (deniedReason) {
-    writeLog({ ...baseLog, timestamp: new Date().toISOString().slice(0, 19), decision: "block", reason: deniedReason, latency_ms: 0 });
+    writeLog({
+      ...baseLog,
+      timestamp: new Date().toISOString().slice(0, 19),
+      decision: "block",
+      reason: deniedReason,
+      latency_ms: 0,
+    });
     block(deniedReason);
     return;
   }
@@ -422,15 +488,31 @@ async function main(): Promise<void> {
   // 0.2. LLM CLI 呼び出しでの機密ファイル参照は強制 ask（LLM 判定の前に hard guard）
   const llmCliAskReason = forceAskForLLMCli(toolName, toolInput);
   if (llmCliAskReason) {
-    writeLog({ ...baseLog, timestamp: new Date().toISOString().slice(0, 19), decision: "ask", reason: llmCliAskReason, latency_ms: 0 });
+    writeLog({
+      ...baseLog,
+      timestamp: new Date().toISOString().slice(0, 19),
+      decision: "ask",
+      reason: llmCliAskReason,
+      latency_ms: 0,
+    });
     ask(llmCliAskReason);
     return;
   }
 
   // 0.3. LLM CLI が hard guard を通過 → 確定的に自動承認（LLM 判定に委ねると送信内容の憶測で非決定的な ask が出る）
-  if (toolName === "Bash" && LLM_CLI_PATTERN.test(String(toolInput.command ?? ""))) {
-    const reason = "claude -p: --no-session-persistence 確認済み・機密参照なし → 自動承認";
-    writeLog({ ...baseLog, timestamp: new Date().toISOString().slice(0, 19), decision: "allow", reason, latency_ms: 0 });
+  if (
+    toolName === "Bash" &&
+    LLM_CLI_PATTERN.test(String(toolInput.command ?? ""))
+  ) {
+    const reason =
+      "claude -p: --no-session-persistence 確認済み・機密参照なし → 自動承認";
+    writeLog({
+      ...baseLog,
+      timestamp: new Date().toISOString().slice(0, 19),
+      decision: "allow",
+      reason,
+      latency_ms: 0,
+    });
     allow(reason);
     return;
   }
@@ -441,9 +523,18 @@ async function main(): Promise<void> {
   //   コード側で確定的に承認する。
   if (toolName === "Bash") {
     const cmd = String(toolInput.command ?? "");
-    if (/\bgit\s+(add|commit)\b/.test(cmd) && !/--no-verify\b|--amend\b/.test(cmd)) {
+    if (
+      /\bgit\s+(add|commit)\b/.test(cmd) &&
+      !/--no-verify\b|--amend\b/.test(cmd)
+    ) {
       const reason = "git add/commit (ローカル・--no-verify なし) → 自動承認";
-      writeLog({ ...baseLog, timestamp: new Date().toISOString().slice(0, 19), decision: "allow", reason, latency_ms: 0 });
+      writeLog({
+        ...baseLog,
+        timestamp: new Date().toISOString().slice(0, 19),
+        decision: "allow",
+        reason,
+        latency_ms: 0,
+      });
       allow(reason);
       return;
     }
@@ -453,45 +544,73 @@ async function main(): Promise<void> {
   const branch = currentBranch();
   if (branch?.startsWith("debug/")) {
     const reason = `debug/* ブランチのため自動承認 (branch: ${branch})`;
-    writeLog({ ...baseLog, timestamp: new Date().toISOString().slice(0, 19), decision: "allow", reason, latency_ms: 0 });
+    writeLog({
+      ...baseLog,
+      timestamp: new Date().toISOString().slice(0, 19),
+      decision: "allow",
+      reason,
+      latency_ms: 0,
+    });
     allow(reason);
     return;
   }
 
-  // 1. readonly_tools
+  // 1. readonly_tools（ツール名単位の静的 allow リスト）
   if (loadReadonlyTools(data.cwd).has(toolName)) {
     const reason = `${toolName}: readonly_tools に登録済みのため自動承認`;
-    writeLog({ ...baseLog, timestamp: new Date().toISOString().slice(0, 19), decision: "allow", reason, latency_ms: 0 });
+    writeLog({
+      ...baseLog,
+      timestamp: new Date().toISOString().slice(0, 19),
+      decision: "allow",
+      reason,
+      latency_ms: 0,
+    });
     allow(reason);
     return;
   }
 
-  // 2. LLM 判定
+  // 2. LLM 分類（category のみ返す）
   const start = Date.now();
-  const result = judge(toolName, toolInput, data.cwd);
+  const judgment = judge(toolName, toolInput, data.cwd);
   const latency_ms = Date.now() - start;
+
+  // 3. per-project category_overrides → 4. GLOBAL_DECISION の順で判定
+  const overrides = loadCategoryOverrides(data.cwd);
+  const overrideDecision = overrides[judgment.category];
+  const decision = overrideDecision ?? GLOBAL_DECISION[judgment.category];
+
+  const defaultReason: Record<Category, string> = {
+    readonly: "read-only 操作",
+    git_local: "ローカル git 操作",
+    git_remote: "リモート git 操作のため確認が必要です",
+    external_write: "外部サービスへの書き込みのため確認が必要です",
+    system_write: "git 管理外への書き込みのため確認が必要です",
+    destructive: "不可逆な破壊操作のためブロックします",
+    uncertain: "操作の影響を確認できないため確認が必要です",
+  };
+
+  const baseReason = judgment.reason ?? defaultReason[judgment.category];
+  const effectiveReason = overrideDecision
+    ? `[category_overrides: ${judgment.category} → ${overrideDecision}] ${baseReason}`
+    : baseReason;
 
   const logEntry: LogEntry = {
     ...baseLog,
     timestamp: new Date().toISOString().slice(0, 19),
-    interpretation: result.interpretation,
-    decision: result.decision === "approve" ? "allow" : result.decision,
-    ...(result.reason ? { reason: result.reason } : {}),
+    interpretation: judgment.interpretation,
+    decision,
+    reason: effectiveReason,
     latency_ms,
   };
 
-  if (result.decision === "approve") {
-    if (result.learn === true) {
-      saveReadonlyTool(toolName, data.cwd);
-    }
-    writeLog(logEntry);
-    allow(result.interpretation ?? "gatekeeper approved");
-  } else if (result.decision === "block") {
-    writeLog(logEntry);
-    block(result.reason ?? "危険な操作のためブロック");
+  writeLog(logEntry);
+
+  if (decision === "allow") {
+    allow(judgment.interpretation ?? defaultReason[judgment.category]);
+  } else if (decision === "block") {
+    block(effectiveReason);
   } else {
-    writeLog(logEntry);
-    ask(result.reason ?? "要確認の操作です");
+    ask(effectiveReason);
   }
 }
 

@@ -22,16 +22,17 @@ gatekeeper の LLM 役割を「category を返すだけ」に縮小し、allow/a
 
 ## 🔥 Hotfix（最優先）
 
-<!-- 未完了なし -->
+- [x] H-1. `loadCategoryOverrides` に `NEVER_OVERRIDE_TO_ALLOW` ガード追加（`destructive`・`system_write` への allow 上書きを禁止）
+- [x] H-2. `git push`（force なし）挙動変更確認：旧 auto-approve → 新 `ask`（`GLOBAL_DECISION.git_remote = "ask"` の設計仕様。CLAUDE.md「push は明示指示のときのみ」と整合）
 
 ---
 
 ## Phase 1: gatekeeper.ts コアリファクタリング [REVIEW]
 
-- [ ] 1-1. 型定義・定数を追加（Category 型・GLOBAL_DECISION マップ・新 Judgment 型・loadCategoryOverrides 関数）
-- [ ] 1-2. SYSTEM_PROMPT を「category のみ返す分類プロンプト」に書き換え → [詳細](docs/briefs/step-1-2-system-prompt.md)
-- [ ] 1-3. extractJson・judge 関数を新フォーマット対応に更新、learn/saveReadonlyTool を削除
-- [ ] 1-4. main() に新決定ロジックを組み込む（category_overrides → GLOBAL_DECISION の 2 段階）
+- [x] 1-1. 型定義・定数を追加（Category 型・GLOBAL_DECISION マップ・新 Judgment 型・loadCategoryOverrides 関数）
+- [x] 1-2. SYSTEM_PROMPT を「category のみ返す分類プロンプト」に書き換え → [詳細](docs/briefs/step-1-2-system-prompt.md)
+- [x] 1-3. extractJson・judge 関数を新フォーマット対応に更新、learn/saveReadonlyTool を削除
+- [x] 1-4. main() に新決定ロジックを組み込む（category_overrides → GLOBAL_DECISION の 2 段階）
 
 ## Phase 2: per-project 設定移行
 
