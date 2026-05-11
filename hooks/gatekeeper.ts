@@ -258,6 +258,7 @@ const NEVER_READONLY: ReadonlySet<string> = new Set([
   "NotebookEdit",
   "Agent",
   "Skill",
+  "Monitor",
 ]);
 
 function loadReadonlyTools(cwd?: string): Set<string> {
