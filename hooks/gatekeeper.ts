@@ -50,6 +50,11 @@ const SYSTEM_PROMPT = `\
 - git 読み取りコマンド（status / log / diff / show / branch 等）
 - コマンド出力の確認（ls / ps / env / which / df / du 等）
 - Web の取得（fetch / curl の GET 等）
+- 解析目的の \`claude -p\` / \`claude --print\` 呼び出し（stdin/引数で対象を渡し stdout で結果を受ける形）。ただし以下を **すべて満たす場合のみ**:
+  - \`--no-session-persistence\` 等で会話履歴を残さない
+  - 送信内容に機密ファイルパス（\`~/.ssh/\`、\`.env\`、\`*.pem\`、\`id_rsa\`、\`id_ed25519\`、\`credentials\`、\`*kube/config\`、\`*aws/credentials\` 等）が含まれない
+  - 上記いずれかを満たさない場合は ask に倒す
+  - 他ベンダー CLI（\`gemini\`、\`ollama\` 等）はベンダー別の判断対象になるため自動承認しない（ask）
 - git 管理下プロジェクト配下のファイル編集・作成・削除
 - git add / git commit（ローカル）/ git push（force なし）
 - ~/.claude/ 配下の編集（settings.json を除く）
@@ -61,7 +66,7 @@ const SYSTEM_PROMPT = `\
 - プロジェクト外へのファイル書き込み（~/.ssh/、~/.aws/、/etc/ 等）
 - ~/.claude/settings.json の編集
 - グローバル・システムへのパッケージインストール（-g / --global / sudo / brew install 等）
-- 外部サービスへの書き込み（API の POST / PUT / DELETE 等）
+- 外部サービスへの書き込み（API の POST / PUT / DELETE 等。read-only な GET、および上記条件を満たす \`claude -p\` 呼び出しのみ「自動承認」側で扱う）
 - プロセス管理（kill / pkill 等）
 - cron の登録・削除
 - 環境変数の永続化（.env 書き込み等）
@@ -201,6 +206,44 @@ function isDenied(toolName: string, toolInput: Record<string, unknown>, patterns
       if (command.includes(pattern)) {
         return `Bash: 禁止パターン '${pattern}' を含むためブロック`;
       }
+    }
+  }
+  return null;
+}
+
+// LLM CLI 呼び出し（claude -p / claude --print）の検出
+const LLM_CLI_PATTERN = /\bclaude\s+(?:-p\b|--print\b)/;
+
+// 機密ファイル参照らしき文字列の検出。LLM CLI 呼び出し時に含まれていたら強制 ask。
+// SYSTEM_PROMPT の LLM 判定だけでは見落としうるため、コード側の hard guard として持つ。
+// 注意: ブラックリスト方式のため網羅性は保証されない（任意の `secrets.txt`・`*.token` 等は
+// このリストに無ければ素通りする）。最終的な責任はユーザー判断に委ねる前提で、メジャーな
+// 機密パスのみを ask に倒すための補助ガードとして運用する。
+const SECRET_REF_PATTERNS: ReadonlyArray<RegExp> = [
+  /(^|[\s"'=/])~?\/?\.ssh\//i,
+  /(^|[\s"'=/])\.env(\b|\.|"|')/i,
+  /\.pem\b/i,
+  /\bid_rsa\b/i,
+  /\bid_ed25519\b/i,
+  /credentials/i,
+  /private[_-]?key/i,
+  /\.kube\/config\b/i,
+  /\.aws\/credentials\b/i,
+  /\.netrc\b/i,
+  /service[_-]?account.*\.json\b/i,
+];
+
+function forceAskForLLMCli(toolName: string, toolInput: Record<string, unknown>): string | null {
+  if (toolName !== "Bash") return null;
+  const command = String(toolInput.command ?? "");
+  if (!LLM_CLI_PATTERN.test(command)) return null;
+  // policy で必須要件としている履歴非保存フラグが付いていない場合は ask に倒す
+  if (!/--no-session-persistence\b/.test(command)) {
+    return "claude -p 呼び出しに --no-session-persistence が付いていません。会話履歴が残る形は自動承認対象外です";
+  }
+  for (const pat of SECRET_REF_PATTERNS) {
+    if (pat.test(command)) {
+      return `LLM CLI 呼び出しに機密ファイル参照らしき文字列 (${pat}) が含まれます。送信内容を確認してください`;
     }
   }
   return null;
@@ -371,6 +414,14 @@ async function main(): Promise<void> {
   if (deniedReason) {
     writeLog({ ...baseLog, timestamp: new Date().toISOString().slice(0, 19), decision: "block", reason: deniedReason, latency_ms: 0 });
     block(deniedReason);
+    return;
+  }
+
+  // 0.2. LLM CLI 呼び出しでの機密ファイル参照は強制 ask（LLM 判定の前に hard guard）
+  const llmCliAskReason = forceAskForLLMCli(toolName, toolInput);
+  if (llmCliAskReason) {
+    writeLog({ ...baseLog, timestamp: new Date().toISOString().slice(0, 19), decision: "ask", reason: llmCliAskReason, latency_ms: 0 });
+    ask(llmCliAskReason);
     return;
   }
 
