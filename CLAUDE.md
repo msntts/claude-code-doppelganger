@@ -119,7 +119,7 @@ lockfile（`pnpm-lock.yaml` / `uv.lock`）は必ずコミットする。`.gitign
 - スクリプト実行: `uv run <script>`（venv を手動 activate しない）
 - 仮想環境は uv が自動管理。`python -m venv` / `source .venv/bin/activate` は書かない
 
-## Advisor・Review の自律起動
+## Advisor・Review・Gatekeeper の自律起動
 
 ### Advisor（設計判断）
 `/execute` スキル経由かどうかに関わらず、以下の場面では advisor ツールを呼び出す：
@@ -132,6 +132,24 @@ lockfile（`pnpm-lock.yaml` / `uv.lock`）は必ずコミットする。`.gitign
 `git commit` を実行する前に必ず `review` スキルを呼び出す。
 `/execute` スキル経由かどうか、変更規模の大小に関わらず適用する。
 （`/execute` 内の `[REVIEW]` フェーズ完了時の自動レビューとは別に、毎コミット直前にも実行する）
+
+### Gatekeeper（ツール実行前の自己評価）
+以下に該当しない操作を実行する前に、`gatekeeper` スキルで安全性を自己評価してから進む。
+
+**評価不要（明らかに安全）:**
+- ファイル読み取り（Read・Bash の cat/grep/find/ls 等）
+- git status / log / diff / fetch / pull
+- ローカル git 操作（add・commit）
+
+**評価が必要（`/gatekeeper` を呼ぶ）:**
+- 外部 API・サービスへの書き込み
+- git push / デプロイ操作
+- git 管理外のファイルへの書き込み（~/.ssh/ 等）
+- rm / rmdir（git 管理外のパスが含まれる場合）
+- 上記に当てはまるか迷う操作
+
+`/gatekeeper` が `ask` を推奨 → ユーザーに確認を求めてから実行する。
+`/gatekeeper` が `block` を推奨 → 実行しない。理由をユーザーに伝える。
 
 ## 応答スタイル
 - 簡潔に。前置き・要約・絵文字は不要
