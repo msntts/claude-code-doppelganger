@@ -5,6 +5,7 @@
 
 import { writeFileSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
 
 interface ObserverState {
   session_id: string;
@@ -37,7 +38,7 @@ async function main(): Promise<void> {
       pending_skill_args: args || null,
     };
 
-    const stateFile = join("/tmp", `claude_observer_${sessionId}.json`);
+    const stateFile = join(tmpdir(), `claude_observer_${sessionId}.json`);
     writeFileSync(stateFile, JSON.stringify(state), "utf-8");
   } catch {
     // fail-open

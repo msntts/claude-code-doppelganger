@@ -14,12 +14,26 @@ import {
   writeFileSync,
 } from "fs";
 import { join } from "path";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 
 const LOG_PATH = join(homedir(), ".claude", "observer-log.jsonl");
 const LOG_MAX_BYTES = 500 * 1024;
 const LOG_BACKUPS = 2;
 const TTL_MS = 60 * 60 * 1000; // 60分
+
+const REJECTION_RE = /却下|やり直し|違う|だめ|NG|使えない|別の/i;
+const MODIFICATION_RE = /でも|ただし|修正|変えて|直して|追加して|ただ(?!し)|一方で/;
+const APPROVAL_RE = /OK|ok|了解|承認|進めて|続けて|問題ない|大丈夫|いいです|そうです|はい/;
+
+type ResponseType = "approval" | "modification" | "rejection" | "unclear";
+
+function classifyResponse(text: string): ResponseType {
+  if (REJECTION_RE.test(text)) return "rejection";
+  if (MODIFICATION_RE.test(text)) return "modification";
+  // 承認語を含み短いメッセージ（30文字以内）を承認とみなす
+  if (text.length <= 30 && APPROVAL_RE.test(text)) return "approval";
+  return "unclear";
+}
 
 interface ObserverState {
   session_id: string;
@@ -35,6 +49,7 @@ interface ObserverEntry {
   prompt_preview: string;
   prompt_len: number;
   human_attribution: "autonomous" | "post_ai";
+  response_type?: ResponseType;
   preceding_skill?: string;
   preceding_skill_ts?: string;
   ai_elapsed_sec?: number;
@@ -51,7 +66,7 @@ function rotateLog(): void {
 }
 
 function readState(sessionId: string): ObserverState | null {
-  const stateFile = join("/tmp", `claude_observer_${sessionId}.json`);
+  const stateFile = join(tmpdir(), `claude_observer_${sessionId}.json`);
   if (!existsSync(stateFile)) return null;
   try {
     return JSON.parse(readFileSync(stateFile, "utf-8")) as ObserverState;
@@ -61,7 +76,7 @@ function readState(sessionId: string): ObserverState | null {
 }
 
 function resetState(sessionId: string, state: ObserverState): void {
-  const stateFile = join("/tmp", `claude_observer_${sessionId}.json`);
+  const stateFile = join(tmpdir(), `claude_observer_${sessionId}.json`);
   try {
     writeFileSync(
       stateFile,
@@ -116,6 +131,7 @@ async function main(): Promise<void> {
     };
 
     if (humanAttribution === "post_ai") {
+      entry.response_type = classifyResponse(prompt);
       entry.preceding_skill = precedingSkill;
       entry.preceding_skill_ts = precedingSkillTs;
       entry.ai_elapsed_sec = aiElapsedSec;

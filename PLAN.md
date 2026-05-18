@@ -31,17 +31,17 @@ doppelganger フックに observer 層を追加し、「人間の自発的判断
 
 ## Phase 2: Agent 検出
 
-- [ ] 2-1. `hooks/observer-agent.ts` 新規作成
-- [ ] 2-2. `settings.json` に PostToolUse Agent matcher を追加
+- [x] 2-1. `hooks/observer-agent.ts` 新規作成
+- [x] 2-2. `settings.json` に PostToolUse Agent matcher を追加
 
 ## Phase 3: シグナル強度分類（テキスト解析）
 
-- [ ] 3-1. `observer-prompt.ts` に `response_type` フィールドを追加
+- [x] 3-1. `observer-prompt.ts` に `response_type` フィールドを追加
 
 ## Phase 4: Stop フックによるクリーンアップ
 
-- [ ] 4-1. `hooks/observer-cleanup.ts` 新規作成
-- [ ] 4-2. `settings.json` に Stop フックを追加
+- [x] 4-1. `hooks/observer-cleanup.ts` 新規作成
+- [x] 4-2. `settings.json` に Stop フックを追加
 
 ---
 

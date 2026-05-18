@@ -61,6 +61,15 @@
             "command": "tsx ~/.claude/hooks/work-logger.ts"
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tsx ~/.claude/hooks/observer-agent.ts"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -69,6 +78,14 @@
           {
             "type": "command",
             "command": "tsx ~/.claude/hooks/caffeinate.ts"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tsx ~/.claude/hooks/observer-cleanup.ts"
           }
         ]
       }
