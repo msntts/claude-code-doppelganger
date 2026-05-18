@@ -45,6 +45,10 @@ doppelganger フックに observer 層を追加し、「人間の自発的判断
 
 ---
 
+## Phase 5: analyze-observer スキル
+
+- [x] 5-1. `skills/analyze-observer/SKILL.md` 新規作成
+
 ## メモ・決定事項
 
 ### 解決する問題
