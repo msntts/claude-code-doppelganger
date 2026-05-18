@@ -25,9 +25,9 @@ doppelganger フックに observer 層を追加し、「人間の自発的判断
 
 ## Phase 1: 最小実装（二値分類: post_ai / autonomous）
 
-- [ ] 1-1. `hooks/observer-skill.ts` 新規作成
-- [ ] 1-2. `hooks/observer-prompt.ts` 新規作成
-- [ ] 1-3. `settings.json` にフック登録（observer-prompt / observer-skill）
+- [x] 1-1. `hooks/observer-skill.ts` 新規作成
+- [x] 1-2. `hooks/observer-prompt.ts` 新規作成
+- [x] 1-3. `settings.json` にフック登録（observer-prompt / observer-skill）
 
 ## Phase 2: Agent 検出
 

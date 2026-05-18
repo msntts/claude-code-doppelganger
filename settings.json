@@ -15,6 +15,14 @@
             "command": "tsx ~/.claude/hooks/caffeinate.ts"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tsx ~/.claude/hooks/observer-prompt.ts"
+          }
+        ]
       }
     ],
     "PreToolUse": [
@@ -32,6 +40,15 @@
           {
             "type": "command",
             "command": "tsx ~/.claude/hooks/remind-toolsearch.ts"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tsx ~/.claude/hooks/observer-skill.ts"
           }
         ]
       }
